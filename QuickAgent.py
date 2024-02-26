@@ -2,7 +2,20 @@ import asyncio
 from dotenv import load_dotenv
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_groq import ChatGroq
+from langchain_openai import ChatOpenAI
+import shutil
+import subprocess
 from dotenv import load_dotenv
+import requests
+import time
+from langchain.memory import ConversationBufferMemory
+from langchain.prompts import (
+    ChatPromptTemplate,
+    MessagesPlaceholder,
+    SystemMessagePromptTemplate,
+    HumanMessagePromptTemplate,
+)
+from langchain.chains import LLMChain
 
 import os
 from time import sleep
@@ -15,31 +28,92 @@ from deepgram import (
     Microphone,
 )
 
-load_dotenv()
 
-# Add imports for your language model processing and TTS libraries at the top
+load_dotenv()
 
 class LanguageModelProcessor:
     def __init__(self):
-        self.chat = ChatGroq(temperature=0, model_name="mixtral-8x7b-32768", groq_api_key=os.getenv("GROQ_API_KEY"))
+        self.llm = ChatGroq(temperature=0, model_name="mixtral-8x7b-32768", groq_api_key=os.getenv("GROQ_API_KEY"))
+        # self.llm = ChatOpenAI(temperature=0, model_name="gpt-4-0125-preview", openai_api_key=os.getenv("OPENAI_API_KEY"))
+        # self.llm = ChatOpenAI(temperature=0, model_name="gpt-3.5-turbo-0125", openai_api_key=os.getenv("OPENAI_API_KEY"))
+
+        self.memory = ConversationBufferMemory(memory_key="chat_history", return_messages=True)
+
+        # Load the system prompt from a file
+        with open('system_prompt.txt', 'r') as file:
+            system_prompt = file.read().strip()
+        
+        self.prompt = ChatPromptTemplate.from_messages([
+            SystemMessagePromptTemplate.from_template(system_prompt),
+            MessagesPlaceholder(variable_name="chat_history"),
+            HumanMessagePromptTemplate.from_template("{text}")
+        ])
+
+        self.conversation = LLMChain(
+            llm=self.llm,
+            prompt=self.prompt,
+            memory=self.memory
+        )
 
     def process(self, text):
-        system = """
-        You are a conversational assistant.
-        Use short, conversational responses as if you're having a live conversation.
-        Do not give any extra context about yourself.
-        """
-        human = "{text}"
-        prompt = ChatPromptTemplate.from_messages([("system", system), ("human", human)])
+        self.memory.chat_memory.add_user_message(text)  # Add user message to memory
 
-        chain = prompt | self.chat
-        response = chain.invoke({"text": text})
-        return response.content
+        start_time = time.time()
+
+        # Go get the response from the LLM
+        response = self.conversation.invoke({"text": text})
+        end_time = time.time()
+
+        self.memory.chat_memory.add_ai_message(response['text'])  # Add AI response to memory
+
+        elapsed_time = int((end_time - start_time) * 1000)
+        print(f"LLM ({elapsed_time}ms): {response['text']}")
+        return response['text']
 
 class TextToSpeech:
+    # Set your Deepgram API Key and desired voice model
+    DG_API_KEY = os.getenv("DEEPGRAM_API_KEY")
+    MODEL_NAME = "alpha-stella-en-v2"  # Example model name, change as needed
+
+    @staticmethod
+    def is_installed(lib_name: str) -> bool:
+        lib = shutil.which(lib_name)
+        return lib is not None
+
     def speak(self, text):
-        # Convert text to speech and play it
-        print(f"Speaking: {text}")  # Placeholder for actual TTS functionality
+        if not self.is_installed("ffplay"):
+            raise ValueError("ffplay not found, necessary to stream audio.")
+
+        DEEPGRAM_URL = f"https://api.beta.deepgram.com/v1/speak?model={self.MODEL_NAME}&performance=some&encoding=linear16&sample_rate=24000"
+        headers = {
+            "Authorization": f"Token {self.DG_API_KEY}",
+            "Content-Type": "application/json"
+        }
+        payload = {
+            "text": text,
+            "voice": self.MODEL_NAME
+        }
+
+        player_command = ["ffplay", "-autoexit", "-", "-nodisp"]
+        player_process = subprocess.Popen(
+            player_command,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+
+        with requests.post(DEEPGRAM_URL, stream=True, headers=headers, json=payload) as r:
+            dg_performance_total_ms = r.headers.get('x-dg-performance-total-ms', 'Not Available')
+            print(f"Deepgram TTS Duration: {dg_performance_total_ms}ms\n")
+
+            for chunk in r.iter_content(chunk_size=1024):
+                if chunk:
+                    player_process.stdin.write(chunk)  # type: ignore
+                    player_process.stdin.flush()  # type: ignore
+
+        if player_process.stdin:
+            player_process.stdin.close()
+        player_process.wait()
 
 class TranscriptCollector:
     def __init__(self):
@@ -56,18 +130,18 @@ class TranscriptCollector:
 
 transcript_collector = TranscriptCollector()
 
-async def get_transcript():
+async def get_transcript(callback):
+    transcript_ready = asyncio.Event()  # Create an asyncio Event to wait on
+    transcription_complete = asyncio.Event()  # Event to signal transcription completion
+
     try:
         # example of setting up a client config. logging values: WARNING, VERBOSE, DEBUG, SPAM
         config = DeepgramClientOptions(options={"keepalive": "true"})
         deepgram: DeepgramClient = DeepgramClient("", config)
-        language_model_processor = LanguageModelProcessor()
-        text_to_speech = TextToSpeech()
 
         dg_connection = deepgram.listen.asynclive.v("1")
 
         async def on_message(self, result, **kwargs):
-            # print (result)
             sentence = result.channel.alternatives[0].transcript
             
             if not result.speech_final:
@@ -78,30 +152,13 @@ async def get_transcript():
                 full_sentence = transcript_collector.get_full_transcript()
                 # Check if the full_sentence is not empty before printing
                 if len(full_sentence.strip()) > 0:
-                    print(f"speaker ({len(full_sentence)}): {full_sentence}")
-                    # Reset the collector for the next sentence
-                    llm_response = language_model_processor.process(full_sentence)
-                    print (llm_response)
-                    # text_to_speech.speak(processed_text)
+                    full_sentence = full_sentence.strip()
+                    print(f"Human: {full_sentence}")
+                    callback(full_sentence)  # Call the callback with the full_sentence
                     transcript_collector.reset()
-
-        async def on_metadata(self, metadata, **kwargs):
-            print(f"\n\n{metadata}\n\n")
-
-        async def on_speech_started(self, speech_started, **kwargs):
-            print(f"\n\n{speech_started}\n\n")
-
-        async def on_utterance_end(self, utterance_end, **kwargs):
-            print(f"\n\n{utterance_end}\n\n")
-
-        async def on_error(self, error, **kwargs):
-            print(f"\n\n{error}\n\n")
+                    transcription_complete.set()  # Signal to stop transcription and exit
 
         dg_connection.on(LiveTranscriptionEvents.Transcript, on_message)
-        # dg_connection.on(LiveTranscriptionEvents.Metadata, on_metadata)
-        # dg_connection.on(LiveTranscriptionEvents.SpeechStarted, on_speech_started)
-        # dg_connection.on(LiveTranscriptionEvents.UtteranceEnd, on_utterance_end)
-        dg_connection.on(LiveTranscriptionEvents.Error, on_error)
 
         options = LiveOptions(
             model="nova-2",
@@ -110,10 +167,6 @@ async def get_transcript():
             encoding="linear16",
             channels=1,
             sample_rate=16000,
-            # To get UtteranceEnd, the following must be set:
-            # interim_results=True,
-            # utterance_end_ms="1000",
-            # vad_events=True,
             endpointing=True
         )
 
@@ -121,26 +174,45 @@ async def get_transcript():
 
         # Open a microphone stream on the default input device
         microphone = Microphone(dg_connection.send)
-
-        # start microphone
         microphone.start()
 
-        while True:
-            if not microphone.is_active():
-                break
-            await asyncio.sleep(1)
+        await transcription_complete.wait()  # Wait for the transcription to complete instead of looping indefinitely
 
         # Wait for the microphone to close
         microphone.finish()
 
         # Indicate that we've finished
-        dg_connection.finish()
-
-        print("Finished")
+        await dg_connection.finish()
 
     except Exception as e:
         print(f"Could not open socket: {e}")
         return
 
+class ConversationManager:
+    def __init__(self):
+        self.transcription_response = ""
+        self.llm = LanguageModelProcessor()
+
+    async def main(self):
+        def handle_full_sentence(full_sentence):
+            self.transcription_response = full_sentence
+
+        # Loop indefinitely until "goodbye" is detected
+        while "goodbye" not in self.transcription_response.lower():
+            await get_transcript(handle_full_sentence)
+            
+            # Check if "goodbye" was said to exit the loop
+            if "goodbye" in self.transcription_response.lower():
+                break
+            
+            llm_response = self.llm.process(self.transcription_response)
+
+            tts = TextToSpeech()
+            tts.speak(llm_response)
+
+            # Reset transcription_response for the next loop iteration
+            self.transcription_response = ""
+
 if __name__ == "__main__":
-    asyncio.run(get_transcript())
+    manager = ConversationManager()
+    asyncio.run(manager.main())
