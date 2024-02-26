@@ -1,10 +1,10 @@
-# Copyright 2023 Deepgram SDK contributors. All Rights Reserved.
-# Use of this source code is governed by a MIT license that can be found in the LICENSE file.
-# SPDX-License-Identifier: MIT
-
 import asyncio
 from dotenv import load_dotenv
-import logging, verboselogs
+from langchain_core.prompts import ChatPromptTemplate
+from langchain_groq import ChatGroq
+from dotenv import load_dotenv
+
+import os
 from time import sleep
 
 from deepgram import (
@@ -16,6 +16,30 @@ from deepgram import (
 )
 
 load_dotenv()
+
+# Add imports for your language model processing and TTS libraries at the top
+
+class LanguageModelProcessor:
+    def __init__(self):
+        self.chat = ChatGroq(temperature=0, model_name="mixtral-8x7b-32768", groq_api_key=os.getenv("GROQ_API_KEY"))
+
+    def process(self, text):
+        system = """
+        You are a conversational assistant.
+        Use short, conversational responses as if you're having a live conversation.
+        Do not give any extra context about yourself.
+        """
+        human = "{text}"
+        prompt = ChatPromptTemplate.from_messages([("system", system), ("human", human)])
+
+        chain = prompt | self.chat
+        response = chain.invoke({"text": text})
+        return response.content
+
+class TextToSpeech:
+    def speak(self, text):
+        # Convert text to speech and play it
+        print(f"Speaking: {text}")  # Placeholder for actual TTS functionality
 
 class TranscriptCollector:
     def __init__(self):
@@ -37,8 +61,8 @@ async def get_transcript():
         # example of setting up a client config. logging values: WARNING, VERBOSE, DEBUG, SPAM
         config = DeepgramClientOptions(options={"keepalive": "true"})
         deepgram: DeepgramClient = DeepgramClient("", config)
-        # otherwise, use default config
-        # deepgram = DeepgramClient()
+        language_model_processor = LanguageModelProcessor()
+        text_to_speech = TextToSpeech()
 
         dg_connection = deepgram.listen.asynclive.v("1")
 
@@ -52,9 +76,14 @@ async def get_transcript():
                 # This is the final part of the current sentence
                 transcript_collector.add_part(sentence)
                 full_sentence = transcript_collector.get_full_transcript()
-                print(f"speaker: {full_sentence}")
-                # Reset the collector for the next sentence
-                transcript_collector.reset()
+                # Check if the full_sentence is not empty before printing
+                if len(full_sentence.strip()) > 0:
+                    print(f"speaker ({len(full_sentence)}): {full_sentence}")
+                    # Reset the collector for the next sentence
+                    llm_response = language_model_processor.process(full_sentence)
+                    print (llm_response)
+                    # text_to_speech.speak(processed_text)
+                    transcript_collector.reset()
 
         async def on_metadata(self, metadata, **kwargs):
             print(f"\n\n{metadata}\n\n")
