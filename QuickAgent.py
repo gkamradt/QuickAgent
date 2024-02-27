@@ -1,13 +1,15 @@
 import asyncio
 from dotenv import load_dotenv
+import shutil
+import subprocess
+import requests
+import time
+import os
+from time import sleep
+
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_groq import ChatGroq
 from langchain_openai import ChatOpenAI
-import shutil
-import subprocess
-from dotenv import load_dotenv
-import requests
-import time
 from langchain.memory import ConversationBufferMemory
 from langchain.prompts import (
     ChatPromptTemplate,
@@ -17,9 +19,6 @@ from langchain.prompts import (
 )
 from langchain.chains import LLMChain
 
-import os
-from time import sleep
-
 from deepgram import (
     DeepgramClient,
     DeepgramClientOptions,
@@ -27,7 +26,6 @@ from deepgram import (
     LiveOptions,
     Microphone,
 )
-
 
 load_dotenv()
 
@@ -73,7 +71,7 @@ class LanguageModelProcessor:
 class TextToSpeech:
     # Set your Deepgram API Key and desired voice model
     DG_API_KEY = os.getenv("DEEPGRAM_API_KEY")
-    MODEL_NAME = "alpha-stella-en-v2"  # Example model name, change as needed
+    MODEL_NAME = "alpha-helios-en"  # Example model name, change as needed
 
     @staticmethod
     def is_installed(lib_name: str) -> bool:
@@ -102,14 +100,18 @@ class TextToSpeech:
             stderr=subprocess.DEVNULL,
         )
 
-        with requests.post(DEEPGRAM_URL, stream=True, headers=headers, json=payload) as r:
-            dg_performance_total_ms = r.headers.get('x-dg-performance-total-ms', 'Not Available')
-            print(f"Deepgram TTS Duration: {dg_performance_total_ms}ms\n")
+        start_time = time.time()  # Record the time before sending the request
+        first_byte_time = None  # Initialize a variable to store the time when the first byte is received
 
+        with requests.post(DEEPGRAM_URL, stream=True, headers=headers, json=payload) as r:
             for chunk in r.iter_content(chunk_size=1024):
                 if chunk:
-                    player_process.stdin.write(chunk)  # type: ignore
-                    player_process.stdin.flush()  # type: ignore
+                    if first_byte_time is None:  # Check if this is the first chunk received
+                        first_byte_time = time.time()  # Record the time when the first byte is received
+                        ttfb = int((first_byte_time - start_time)*1000)  # Calculate the time to first byte
+                        print(f"TTS Time to First Byte (TTFB): {ttfb}ms\n")
+                    player_process.stdin.write(chunk)
+                    player_process.stdin.flush()
 
         if player_process.stdin:
             player_process.stdin.close()
