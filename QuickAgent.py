@@ -5,7 +5,6 @@ import subprocess
 import requests
 import time
 import os
-from time import sleep
 
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_groq import ChatGroq
@@ -71,7 +70,7 @@ class LanguageModelProcessor:
 class TextToSpeech:
     # Set your Deepgram API Key and desired voice model
     DG_API_KEY = os.getenv("DEEPGRAM_API_KEY")
-    MODEL_NAME = "alpha-helios-en"  # Example model name, change as needed
+    MODEL_NAME = "alpha-asteria-en"  # Example model name, change as needed
 
     @staticmethod
     def is_installed(lib_name: str) -> bool:
@@ -133,7 +132,6 @@ class TranscriptCollector:
 transcript_collector = TranscriptCollector()
 
 async def get_transcript(callback):
-    transcript_ready = asyncio.Event()  # Create an asyncio Event to wait on
     transcription_complete = asyncio.Event()  # Event to signal transcription completion
 
     try:
@@ -142,6 +140,7 @@ async def get_transcript(callback):
         deepgram: DeepgramClient = DeepgramClient("", config)
 
         dg_connection = deepgram.listen.asynclive.v("1")
+        print ("Listening...")
 
         async def on_message(self, result, **kwargs):
             sentence = result.channel.alternatives[0].transcript
@@ -169,7 +168,8 @@ async def get_transcript(callback):
             encoding="linear16",
             channels=1,
             sample_rate=16000,
-            endpointing=True
+            endpointing=300,
+            smart_format=True,
         )
 
         await dg_connection.start(options)
@@ -200,10 +200,10 @@ class ConversationManager:
             self.transcription_response = full_sentence
 
         # Loop indefinitely until "goodbye" is detected
-        while "goodbye" not in self.transcription_response.lower():
+        while True:
             await get_transcript(handle_full_sentence)
             
-            # Check if "goodbye" was said to exit the loop
+            # Check for "goodbye" to exit the loop
             if "goodbye" in self.transcription_response.lower():
                 break
             

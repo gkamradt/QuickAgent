@@ -85,7 +85,7 @@ def send_tts_request(text):
                     print(f"Time to First Byte (TTFB): {ttfb}ms")
                 # Write each chunk to the player's stdin immediately
                 player_process.stdin.write(chunk)  # type: ignore
-            player_process.stdin.flush()  # type: ignore
+                player_process.stdin.flush()  # type: ignore
 
     # Close the player's stdin and wait for the process to finish
     if player_process.stdin:
