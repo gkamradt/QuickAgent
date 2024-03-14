@@ -81,7 +81,7 @@ class TextToSpeech:
         if not self.is_installed("ffplay"):
             raise ValueError("ffplay not found, necessary to stream audio.")
 
-        DEEPGRAM_URL = f"https://api.beta.deepgram.com/v1/speak?model={self.MODEL_NAME}&performance=some&encoding=linear16&sample_rate=24000"
+        DEEPGRAM_URL = f"https://api.deepgram.com/v1/speak?model={self.MODEL_NAME}&performance=some&encoding=linear16&sample_rate=24000"
         headers = {
             "Authorization": f"Token {self.DG_API_KEY}",
             "Content-Type": "application/json"
