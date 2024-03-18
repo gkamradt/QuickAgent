@@ -70,7 +70,7 @@ class LanguageModelProcessor:
 class TextToSpeech:
     # Set your Deepgram API Key and desired voice model
     DG_API_KEY = os.getenv("DEEPGRAM_API_KEY")
-    MODEL_NAME = "alpha-asteria-en"  # Example model name, change as needed
+    MODEL_NAME = "aura-helios-en"  # Example model name, change as needed
 
     @staticmethod
     def is_installed(lib_name: str) -> bool:
@@ -87,8 +87,7 @@ class TextToSpeech:
             "Content-Type": "application/json"
         }
         payload = {
-            "text": text,
-            "voice": self.MODEL_NAME
+            "text": text
         }
 
         player_command = ["ffplay", "-autoexit", "-", "-nodisp"]
